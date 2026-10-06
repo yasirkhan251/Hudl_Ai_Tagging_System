@@ -88,3 +88,17 @@ During tracking, press **C** to recalibrate the court polygon if the Hudl camera
 
 A secondary safety limit keeps at most 12 accepted player detections per frame.
 
+
+
+## V3: Ball + performance test
+
+The current test version adds:
+- COCO sports-ball detection (class 32)
+- lightweight ball smoothing/persistence
+- ball status overlay
+- YOLO inference timing
+- CUDA FP16 inference when CUDA is available
+- reduced OCR work: confirmed jersey identities are not repeatedly rescanned
+- YOLO input-size control
+
+The ball detector is intentionally a first test. If the generic sports-ball class is unreliable on real Hudl footage, the next step is a dedicated volleyball detector trained on Hudl frames.
