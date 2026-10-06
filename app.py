@@ -189,6 +189,7 @@ def main():
         while True:
             capture_start = time.perf_counter()
             frame = capture.grab(roi)
+            raw_frame = frame.copy()
             capture_ms = (time.perf_counter() - capture_start) * 1000.0
 
             frame_index += 1
@@ -363,7 +364,8 @@ def main():
                 if now_capture - last_ball_capture >= BALL_CAPTURE_INTERVAL:
                     ball_frame_count += 1
                     filename = BALL_FRAME_DIR / f"ball_{int(time.time())}_{ball_frame_count:05d}.jpg"
-                    cv2.imwrite(str(filename), frame)
+                    # Save the clean Hudl frame before any AI overlays.
+                    cv2.imwrite(str(filename), raw_frame)
                     last_ball_capture = now_capture
                     print(f"Saved ball-training frame: {filename}")
 
