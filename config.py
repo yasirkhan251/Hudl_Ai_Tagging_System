@@ -11,3 +11,10 @@ MAX_TRACK_AGE = 180
 MAX_PLAYERS = 12
 
 WINDOW_NAME = "Hudl AI Tagging System - Player Identity"
+
+# V3 ball and performance settings
+BALL_CONFIDENCE = 0.20
+BALL_MAX_MISSING = 8
+BALL_SMOOTHING = 0.65
+YOLO_IMGSZ = 960
+YOLO_HALF = True
