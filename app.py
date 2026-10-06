@@ -376,6 +376,10 @@ def main():
 
             cv2.imshow(WINDOW_NAME, frame)
 
+            # The OpenCV window must exist before registering mouse callbacks.
+            if ball_capture is not None:
+                ball_capture.bind_mouse_callback()
+
             key = cv2.waitKey(1) & 0xFF
 
             if ball_capture.active:
