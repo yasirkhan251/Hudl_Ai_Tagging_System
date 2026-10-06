@@ -33,7 +33,13 @@ class BallCaptureTool:
         self.frame = None
         self.saved_count = 0
 
-        cv2.setMouseCallback(self.window_name, self._mouse_callback)
+
+    def bind_mouse_callback(self):
+        """Attach the mouse handler after the OpenCV window exists."""
+        try:
+            cv2.setMouseCallback(self.window_name, self._mouse_callback)
+        except cv2.error as exc:
+            print(f"[BALL] Could not attach mouse callback yet: {exc}")
 
     def start_capture(self, frame):
         self.active = True
