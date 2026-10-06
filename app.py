@@ -10,9 +10,15 @@ import easyocr
 import torch
 from ultralytics import YOLO
 
+from ball_tracker import BallTracker
+
 from capture import ScreenCapture, select_screen_roi
 from court_filter import draw_court, foot_inside_court, select_court_roi
-from config import CONFIDENCE, OCR_CONFIDENCE, OCR_EVERY_N_FRAMES, OUTPUT_DIR, YOLO_MODEL, WINDOW_NAME, MAX_PLAYERS
+from config import (
+    CONFIDENCE, OCR_CONFIDENCE, OCR_EVERY_N_FRAMES, OUTPUT_DIR, YOLO_MODEL,
+    WINDOW_NAME, MAX_PLAYERS, BALL_CONFIDENCE, BALL_MAX_MISSING,
+    BALL_SMOOTHING, YOLO_IMGSZ, YOLO_HALF,
+)
 from player_memory import PlayerMemory
 
 
@@ -122,6 +128,7 @@ def main():
 
     capture = ScreenCapture()
     memory = PlayerMemory()
+    ball = BallTracker(max_missing=BALL_MAX_MISSING, smoothing=BALL_SMOOTHING)
     frame_index = 0
     last_fps_time = time.time()
     frames_since_fps = 0
@@ -134,14 +141,18 @@ def main():
             frame_index += 1
             frames_since_fps += 1
 
+            inference_start = time.perf_counter()
             results = model.track(
                 frame,
                 persist=True,
                 tracker="botsort.yaml",
-                classes=[0],
-                conf=CONFIDENCE,
+                classes=[0, 32],
+                conf=min(CONFIDENCE, BALL_CONFIDENCE),
+                imgsz=YOLO_IMGSZ,
+                half=bool(YOLO_HALF and use_gpu),
                 verbose=False,
             )
+            inference_ms = (time.perf_counter() - inference_start) * 1000.0
 
             result = results[0]
             boxes = result.boxes
@@ -150,12 +161,28 @@ def main():
                 ids = boxes.id.cpu().numpy().astype(int)
                 xyxy = boxes.xyxy.cpu().numpy()
                 confs = boxes.conf.cpu().numpy()
+                classes = boxes.cls.cpu().numpy().astype(int)
+
+                ball_candidates = []
+                for index, box in enumerate(xyxy):
+                    if classes[index] != 32 or float(confs[index]) < BALL_CONFIDENCE:
+                        continue
+                    x1, y1, x2, y2 = map(int, box)
+                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                    if foot_inside_court((cx, cy, cx, cy), court):
+                        ball_candidates.append((float(confs[index]), box))
+
+                if ball_candidates:
+                    best_conf, best_box = max(ball_candidates, key=lambda item: item[0])
+                    ball.update(best_box, best_conf)
+                else:
+                    ball.mark_missing()
 
                 # Filter BEFORE OCR/memory: only people whose feet are inside
                 # the calibrated court zone are treated as volleyball players.
                 candidates = []
                 for index, box in enumerate(xyxy):
-                    if foot_inside_court(box, court):
+                    if classes[index] == 0 and foot_inside_court(box, court):
                         candidates.append((index, box))
 
                 # Safety limit. Keep the largest/highest-confidence court
@@ -176,7 +203,13 @@ def main():
                     crop = frame[y1:y2, x1:x2]
                     jersey, jersey_confidence = (None, 0.0)
 
-                    if frame_index % OCR_EVERY_N_FRAMES == 0:
+                    player = memory.get(track_id)
+                    needs_ocr = (
+                        player is None
+                        or player["jersey"] is None
+                        or player["jersey_confidence"] < 0.80
+                    )
+                    if needs_ocr and frame_index % OCR_EVERY_N_FRAMES == 0:
                         jersey, jersey_confidence = read_jersey(reader, crop)
 
                     memory.observe(
@@ -197,11 +230,30 @@ def main():
                 frames_since_fps = 0
                 last_fps_time = now
 
+            ball.draw(frame)
             draw_court(frame, court)
-            cv2.rectangle(frame, (0, 0), (390, 36), (15, 20, 25), -1)
-            cv2.putText(frame, f"PLAYER AI | FPS {fps:.1f} | MAX {MAX_PLAYERS}",
-                        (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
-                        (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.rectangle(frame, (0, 0), (520, 60), (15, 20, 25), -1)
+            ball_status = "TRACKED" if ball.visible else "LOST"
+            cv2.putText(
+                frame,
+                f"PLAYER AI | FPS {fps:.1f} | PLAYERS {len(candidates) if 'candidates' in locals() else 0}",
+                (10, 24),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.58,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame,
+                f"BALL: {ball_status} | YOLO {inference_ms:.0f} ms",
+                (10, 49),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.50,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
 
             cv2.imshow(WINDOW_NAME, frame)
 
