@@ -131,23 +131,48 @@ V5 adds:
 - `train_volleyball.py` for fine-tuning YOLOv8n
 - `data/volleyball_dataset/data.yaml`
 
-### Collect training frames
+### Collect and label training data directly from Hudl
 
-Run `python app.py`. When the volleyball is clearly visible, press **B**. The clean frame is saved without AI overlays.
+The **B** key is now an interactive volleyball capture tool, so you do not need to manually type YOLO coordinates.
 
-Collect diverse examples: ball near the net, ball high in the air, ball near a player, motion blur, different court positions, different lighting, and difficult/partially occluded frames.
+1. Run `python app.py`.
+2. When the volleyball is clearly visible, press **B**.
+3. Use the **mouse to drag a tight rectangle around the volleyball**.
+4. Press **ENTER** or **S** to save.
+5. Press **ESC** if the box is wrong and try again.
+6. Repeat this for many different ball positions and appearances.
 
-### Label the ball
+Every capture automatically creates all three:
 
-Copy captured frames into `data/volleyball_dataset/images/train` and `data/volleyball_dataset/images/val`, with matching YOLO label files in `labels/train` and `labels/val`.
+`data/volleyball_dataset/images/train/*.jpg`
+- the complete clean Hudl frame
 
-Each visible volleyball gets one YOLO bounding box label:
-`0 center_x center_y width height`
+`data/volleyball_dataset/labels/train/*.txt`
+- the YOLO annotation for the box you drew
 
-Coordinates are normalized from 0 to 1. Use a YOLO-format labeling tool such as LabelImg or CVAT.
+`data/volleyball_dataset/crops/*.jpg`
+- a tight crop showing exactly how the volleyball looks
+
+The label is automatically written as YOLO class `0` (volleyball), with normalized coordinates. This means the mouse box becomes training data automatically.
+
+Collect diverse examples:
+- ball near the net
+- ball high in the air
+- ball near a player
+- ball near the boundary
+- motion blur
+- small/distant ball
+- different camera zoom levels
+- different lighting
+- partial occlusion
+- ball at different court locations
+
+Aim for **500–1000 labeled captures** before serious training. Avoid capturing many nearly identical frames.
 
 ### Train
 
-Run `python train_volleyball.py`. The best model is copied to `models/volleyball.pt`.
+Before training, create a validation split from the captured training data (roughly 80% train / 20% validation). Then run `python train_volleyball.py`. The best model is copied to `models/volleyball.pt`.
+
+For a quick first test, you can train directly from the captured `images/train` set, but a proper validation split is recommended.
 
 Restart `python app.py`. V5 automatically loads `models/volleyball.pt` for ball detection.
