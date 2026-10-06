@@ -12,3 +12,8 @@ models/*.engine
 *.mp4
 *.avi
 *.mkv
+
+# Local volleyball training data
+/data/ball_frames/
+/data/volleyball_dataset/images/
+/data/volleyball_dataset/labels/
