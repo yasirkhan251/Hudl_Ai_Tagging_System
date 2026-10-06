@@ -29,6 +29,7 @@ from config import (
     BALL_SMOOTHING,
     YOLO_IMGSZ,
     YOLO_HALF, YOLO_MAX_DET, BALL_MODEL, BALL_FRAME_DIR, BALL_CAPTURE_INTERVAL,
+    BALL_DATASET_DIR,
 )
 from player_memory import PlayerMemory
 
