@@ -118,3 +118,36 @@ The live overlay reports:
 
 YOLO inference is also tuned for the RTX 3050 test target with a smaller input size, FP16 when CUDA is available, and a detection cap.
 
+
+
+## V5: Dedicated volleyball detector
+
+The generic COCO sports-ball class has been removed from the player model. Player detection now handles people only.
+
+V5 adds:
+- `ball_detector.py` for a dedicated one-class volleyball YOLO model
+- `models/volleyball.pt` as the expected trained model
+- **B** hotkey to capture clean Hudl frames into `data/ball_frames/`
+- `train_volleyball.py` for fine-tuning YOLOv8n
+- `data/volleyball_dataset/data.yaml`
+
+### Collect training frames
+
+Run `python app.py`. When the volleyball is clearly visible, press **B**. The clean frame is saved without AI overlays.
+
+Collect diverse examples: ball near the net, ball high in the air, ball near a player, motion blur, different court positions, different lighting, and difficult/partially occluded frames.
+
+### Label the ball
+
+Copy captured frames into `data/volleyball_dataset/images/train` and `data/volleyball_dataset/images/val`, with matching YOLO label files in `labels/train` and `labels/val`.
+
+Each visible volleyball gets one YOLO bounding box label:
+`0 center_x center_y width height`
+
+Coordinates are normalized from 0 to 1. Use a YOLO-format labeling tool such as LabelImg or CVAT.
+
+### Train
+
+Run `python train_volleyball.py`. The best model is copied to `models/volleyball.pt`.
+
+Restart `python app.py`. V5 automatically loads `models/volleyball.pt` for ball detection.
