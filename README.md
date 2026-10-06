@@ -102,3 +102,19 @@ The current test version adds:
 - YOLO input-size control
 
 The ball detector is intentionally a first test. If the generic sports-ball class is unreliable on real Hudl footage, the next step is a dedicated volleyball detector trained on Hudl frames.
+
+
+## V4: Performance + async OCR
+
+V4 moves EasyOCR into a background worker so OCR no longer blocks the main capture/detection/display loop.
+
+The live overlay reports:
+- total FPS
+- player count
+- ball status
+- YOLO inference time
+- screen capture time
+- OCR queue size
+
+YOLO inference is also tuned for the RTX 3050 test target with a smaller input size, FP16 when CUDA is available, and a detection cap.
+
