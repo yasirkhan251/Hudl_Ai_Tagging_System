@@ -11,7 +11,8 @@ import torch
 from ultralytics import YOLO
 
 from capture import ScreenCapture, select_screen_roi
-from config import CONFIDENCE, OCR_CONFIDENCE, OCR_EVERY_N_FRAMES, OUTPUT_DIR, YOLO_MODEL, WINDOW_NAME
+from court_filter import draw_court, foot_inside_court, select_court_roi
+from config import CONFIDENCE, OCR_CONFIDENCE, OCR_EVERY_N_FRAMES, OUTPUT_DIR, YOLO_MODEL, WINDOW_NAME, MAX_PLAYERS
 from player_memory import PlayerMemory
 
 
@@ -107,7 +108,17 @@ def main():
 
     print("Select the Hudl video region...")
     roi = select_screen_roi()
-    print(f"ROI: {roi}")
+    print(f"Video ROI: {roi}")
+
+    # Court coordinates are relative to the captured Hudl video frame.
+    print("Select the full volleyball court area...")
+    preview_capture = ScreenCapture()
+    try:
+        preview = preview_capture.grab(roi)
+    finally:
+        preview_capture.close()
+    court = select_court_roi(preview)
+    print(f"Court zone: {court}")
 
     capture = ScreenCapture()
     memory = PlayerMemory()
@@ -140,7 +151,20 @@ def main():
                 xyxy = boxes.xyxy.cpu().numpy()
                 confs = boxes.conf.cpu().numpy()
 
+                # Filter BEFORE OCR/memory: only people whose feet are inside
+                # the calibrated court zone are treated as volleyball players.
+                candidates = []
                 for index, box in enumerate(xyxy):
+                    if foot_inside_court(box, court):
+                        candidates.append((index, box))
+
+                # Safety limit. Keep the largest/highest-confidence court
+                # detections if a bad frame contains more than 12 candidates.
+                if len(candidates) > MAX_PLAYERS:
+                    candidates.sort(key=lambda item: float(confs[item[0]]), reverse=True)
+                    candidates = candidates[:MAX_PLAYERS]
+
+                for index, box in candidates:
                     track_id = int(ids[index])
                     x1, y1, x2, y2 = map(int, box)
 
@@ -173,8 +197,9 @@ def main():
                 frames_since_fps = 0
                 last_fps_time = now
 
-            cv2.rectangle(frame, (0, 0), (350, 36), (15, 20, 25), -1)
-            cv2.putText(frame, f"PLAYER AI | FPS {fps:.1f}",
+            draw_court(frame, court)
+            cv2.rectangle(frame, (0, 0), (390, 36), (15, 20, 25), -1)
+            cv2.putText(frame, f"PLAYER AI | FPS {fps:.1f} | MAX {MAX_PLAYERS}",
                         (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
                         (255, 255, 255), 2, cv2.LINE_AA)
 
