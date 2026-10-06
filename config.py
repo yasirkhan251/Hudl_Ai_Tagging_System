@@ -12,17 +12,17 @@ MAX_PLAYERS = 12
 
 WINDOW_NAME = "Hudl AI Tagging System - Player Identity"
 
-# V3 ball and performance settings
 BALL_CONFIDENCE = 0.20
 BALL_MAX_MISSING = 8
 BALL_SMOOTHING = 0.65
 YOLO_IMGSZ = 768
 YOLO_HALF = True
-
-# Limit the number of raw detections before court filtering.
 YOLO_MAX_DET = 40
 
 BALL_MODEL = ROOT / "models" / "volleyball.pt"
 BALL_USE_GENERIC_FALLBACK = False
 BALL_FRAME_DIR = ROOT / "data" / "ball_frames"
 BALL_CAPTURE_INTERVAL = 0.5
+
+# Interactive capture writes ready-to-train YOLO images/labels here.
+BALL_DATASET_DIR = ROOT / "data" / "volleyball_dataset"
