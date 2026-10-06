@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -11,13 +12,21 @@ import torch
 from ultralytics import YOLO
 
 from ball_tracker import BallTracker
-
 from capture import ScreenCapture, select_screen_roi
 from court_filter import draw_court, foot_inside_court, select_court_roi
 from config import (
-    CONFIDENCE, OCR_CONFIDENCE, OCR_EVERY_N_FRAMES, OUTPUT_DIR, YOLO_MODEL,
-    WINDOW_NAME, MAX_PLAYERS, BALL_CONFIDENCE, BALL_MAX_MISSING,
-    BALL_SMOOTHING, YOLO_IMGSZ, YOLO_HALF,
+    CONFIDENCE,
+    OCR_CONFIDENCE,
+    OCR_EVERY_N_FRAMES,
+    OUTPUT_DIR,
+    YOLO_MODEL,
+    WINDOW_NAME,
+    MAX_PLAYERS,
+    BALL_CONFIDENCE,
+    BALL_MAX_MISSING,
+    BALL_SMOOTHING,
+    YOLO_IMGSZ,
+    YOLO_HALF,
 )
 from player_memory import PlayerMemory
 
@@ -44,7 +53,9 @@ def read_jersey(reader, crop):
 
     gray = cv2.cvtColor(torso, cv2.COLOR_BGR2GRAY)
     gray = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-    gray = cv2.copyMakeBorder(gray, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=255)
+    gray = cv2.copyMakeBorder(
+        gray, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=255
+    )
 
     results = reader.readtext(
         gray,
@@ -78,20 +89,37 @@ def draw_player(frame, box, track_id, memory):
         label += f"  #{jersey}"
 
     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 120), 2)
-    cv2.rectangle(frame, (x1, max(0, y1 - 28)), (x1 + 190, y1), (20, 30, 30), -1)
-    cv2.putText(frame, label, (x1 + 5, max(18, y1 - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.rectangle(
+        frame, (x1, max(0, y1 - 28)), (x1 + 190, y1), (20, 30, 30), -1
+    )
+    cv2.putText(
+        frame,
+        label,
+        (x1 + 5, max(18, y1 - 8)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
 
     if jersey is not None:
-        cv2.putText(frame, f"Jersey memory: {jersey_conf:.0%}",
-                    (x1, min(frame.shape[0] - 8, y2 + 20)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 220, 120), 1, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            f"Jersey memory: {jersey_conf:.0%}",
+            (x1, min(frame.shape[0] - 8, y2 + 20)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (0, 220, 120),
+            1,
+            cv2.LINE_AA,
+        )
 
 
 def main():
-    print("HUDL AI TAGGING SYSTEM - PLAYER IDENTITY V1")
+    print("HUDL AI TAGGING SYSTEM - V4 PERFORMANCE + ASYNC OCR")
     print("Open Hudl first. Select only the video/player area.")
-    print("Press Q in the AI window to stop.")
+    print("Press C to recalibrate the court. Press Q to stop.")
 
     model_path = Path(YOLO_MODEL)
     if not model_path.exists():
@@ -116,30 +144,70 @@ def main():
     roi = select_screen_roi()
     print(f"Video ROI: {roi}")
 
-    # Court coordinates are relative to the captured Hudl video frame.
     print("Select the full volleyball court area...")
     preview_capture = ScreenCapture()
     try:
         preview = preview_capture.grab(roi)
     finally:
         preview_capture.close()
+
     court = select_court_roi(preview)
     print(f"Court polygon points: {len(court)}")
 
     capture = ScreenCapture()
     memory = PlayerMemory()
     ball = BallTracker(max_missing=BALL_MAX_MISSING, smoothing=BALL_SMOOTHING)
+
+    # OCR runs in a separate worker so a slow EasyOCR call does not stall
+    # the capture/detection/display loop.
+    ocr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr")
+    ocr_jobs: dict[int, Future] = {}
+
     frame_index = 0
-    last_fps_time = time.time()
+    last_fps_time = time.perf_counter()
     frames_since_fps = 0
     fps = 0.0
+
+    inference_ms = 0.0
+    capture_ms = 0.0
+    ocr_pending = 0
+
     memory_path = OUTPUT_DIR / "player_memory.json"
 
     try:
         while True:
+            capture_start = time.perf_counter()
             frame = capture.grab(roi)
+            capture_ms = (time.perf_counter() - capture_start) * 1000.0
+
             frame_index += 1
             frames_since_fps += 1
+
+            # Apply completed OCR results without blocking.
+            completed_jobs = []
+            for track_id, future in list(ocr_jobs.items()):
+                if not future.done():
+                    continue
+
+                completed_jobs.append(track_id)
+                try:
+                    jersey, jersey_confidence = future.result()
+                except Exception as exc:
+                    print(f"OCR worker error for track {track_id}: {exc}")
+                    jersey, jersey_confidence = None, 0.0
+
+                player = memory.get(track_id)
+                if player is not None and jersey is not None:
+                    memory.observe(
+                        track_id,
+                        jersey=jersey,
+                        jersey_confidence=jersey_confidence,
+                        bbox=player["bbox"],
+                        detection_confidence=player["detection_confidence"],
+                    )
+
+            for track_id in completed_jobs:
+                ocr_jobs.pop(track_id, None)
 
             inference_start = time.perf_counter()
             results = model.track(
@@ -147,7 +215,7 @@ def main():
                 persist=True,
                 tracker="botsort.yaml",
                 classes=[0, 32],
-                conf=min(CONFIDENCE, BALL_CONFIDENCE),
+                conf=CONFIDENCE,
                 imgsz=YOLO_IMGSZ,
                 half=bool(YOLO_HALF and use_gpu),
                 verbose=False,
@@ -157,86 +225,107 @@ def main():
             result = results[0]
             boxes = result.boxes
 
-            if boxes is not None and len(boxes) > 0 and boxes.id is not None:
-                ids = boxes.id.cpu().numpy().astype(int)
+            candidates = []
+
+            if boxes is not None and len(boxes) > 0:
                 xyxy = boxes.xyxy.cpu().numpy()
                 confs = boxes.conf.cpu().numpy()
                 classes = boxes.cls.cpu().numpy().astype(int)
 
+                # Ball detection is independent of tracker IDs. The generic
+                # COCO sports-ball class is only a temporary test detector.
                 ball_candidates = []
                 for index, box in enumerate(xyxy):
-                    if classes[index] != 32 or float(confs[index]) < BALL_CONFIDENCE:
+                    if classes[index] != 32:
                         continue
+                    confidence = float(confs[index])
+                    if confidence < BALL_CONFIDENCE:
+                        continue
+
                     x1, y1, x2, y2 = map(int, box)
-                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                    cx = (x1 + x2) // 2
+                    cy = (y1 + y2) // 2
+
                     if foot_inside_court((cx, cy, cx, cy), court):
-                        ball_candidates.append((float(confs[index]), box))
+                        ball_candidates.append((confidence, box))
 
                 if ball_candidates:
-                    best_conf, best_box = max(ball_candidates, key=lambda item: item[0])
+                    best_conf, best_box = max(
+                        ball_candidates, key=lambda item: item[0]
+                    )
                     ball.update(best_box, best_conf)
                 else:
                     ball.mark_missing()
 
-                # Filter BEFORE OCR/memory: only people whose feet are inside
-                # the calibrated court zone are treated as volleyball players.
-                candidates = []
-                for index, box in enumerate(xyxy):
-                    if classes[index] == 0 and foot_inside_court(box, court):
+                # Players require tracker IDs.
+                ids = boxes.id.cpu().numpy().astype(int) if boxes.id is not None else None
+
+                if ids is not None:
+                    for index, box in enumerate(xyxy):
+                        if classes[index] != 0:
+                            continue
+                        if not foot_inside_court(box, court):
+                            continue
                         candidates.append((index, box))
 
-                # Safety limit. Keep the largest/highest-confidence court
-                # detections if a bad frame contains more than 12 candidates.
-                if len(candidates) > MAX_PLAYERS:
-                    candidates.sort(key=lambda item: float(confs[item[0]]), reverse=True)
-                    candidates = candidates[:MAX_PLAYERS]
+            if len(candidates) > MAX_PLAYERS:
+                candidates.sort(
+                    key=lambda item: float(confs[item[0]]), reverse=True
+                )
+                candidates = candidates[:MAX_PLAYERS]
 
-                for index, box in candidates:
-                    track_id = int(ids[index])
-                    x1, y1, x2, y2 = map(int, box)
+            for index, box in candidates:
+                track_id = int(ids[index])
+                x1, y1, x2, y2 = map(int, box)
 
-                    x1 = max(0, x1)
-                    y1 = max(0, y1)
-                    x2 = min(frame.shape[1], x2)
-                    y2 = min(frame.shape[0], y2)
+                x1 = max(0, x1)
+                y1 = max(0, y1)
+                x2 = min(frame.shape[1], x2)
+                y2 = min(frame.shape[0], y2)
 
-                    crop = frame[y1:y2, x1:x2]
-                    jersey, jersey_confidence = (None, 0.0)
+                player = memory.observe(
+                    track_id,
+                    bbox=(x1, y1, x2, y2),
+                    detection_confidence=float(confs[index]),
+                )
 
-                    player = memory.get(track_id)
-                    needs_ocr = (
-                        player is None
-                        or player["jersey"] is None
-                        or player["jersey_confidence"] < 0.80
+                needs_ocr = (
+                    player["jersey"] is None
+                    or player["jersey_confidence"] < 0.80
+                )
+
+                # Only one OCR job per tracker at a time.
+                if (
+                    needs_ocr
+                    and frame_index % OCR_EVERY_N_FRAMES == 0
+                    and track_id not in ocr_jobs
+                ):
+                    crop = frame[y1:y2, x1:x2].copy()
+                    ocr_jobs[track_id] = ocr_executor.submit(
+                        read_jersey, reader, crop
                     )
-                    if needs_ocr and frame_index % OCR_EVERY_N_FRAMES == 0:
-                        jersey, jersey_confidence = read_jersey(reader, crop)
 
-                    memory.observe(
-                        track_id,
-                        jersey=jersey,
-                        jersey_confidence=jersey_confidence,
-                        bbox=(x1, y1, x2, y2),
-                        detection_confidence=float(confs[index]),
-                    )
-
-                    draw_player(frame, (x1, y1, x2, y2), track_id, memory)
+                draw_player(frame, (x1, y1, x2, y2), track_id, memory)
 
             memory.prune()
 
-            now = time.time()
+            now = time.perf_counter()
             if now - last_fps_time >= 1.0:
                 fps = frames_since_fps / (now - last_fps_time)
                 frames_since_fps = 0
                 last_fps_time = now
 
+            ocr_pending = len(ocr_jobs)
+
             ball.draw(frame)
             draw_court(frame, court)
-            cv2.rectangle(frame, (0, 0), (520, 60), (15, 20, 25), -1)
+
+            cv2.rectangle(frame, (0, 0), (600, 86), (15, 20, 25), -1)
+
             ball_status = "TRACKED" if ball.visible else "LOST"
             cv2.putText(
                 frame,
-                f"PLAYER AI | FPS {fps:.1f} | PLAYERS {len(candidates) if 'candidates' in locals() else 0}",
+                f"AI | FPS {fps:.1f} | PLAYERS {len(candidates)} | BALL {ball_status}",
                 (10, 24),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.58,
@@ -246,11 +335,21 @@ def main():
             )
             cv2.putText(
                 frame,
-                f"BALL: {ball_status} | YOLO {inference_ms:.0f} ms",
+                f"YOLO {inference_ms:.0f}ms | CAP {capture_ms:.1f}ms | OCR QUEUE {ocr_pending}",
                 (10, 49),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.50,
+                0.48,
                 (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame,
+                "C=Recalibrate Court | Q=Exit",
+                (10, 72),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (190, 190, 190),
                 1,
                 cv2.LINE_AA,
             )
@@ -268,11 +367,13 @@ def main():
     finally:
         capture.close()
         cv2.destroyAllWindows()
+        ocr_executor.shutdown(wait=False, cancel_futures=True)
 
         with open(memory_path, "w", encoding="utf-8") as file:
             json.dump(memory.snapshot(), file, indent=2)
 
         print(f"Saved player memory: {memory_path}")
+        print("AI player tracking stopped.")
 
 
 if __name__ == "__main__":
