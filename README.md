@@ -71,3 +71,16 @@ Next:
 - Automatic Hudl tagging
 
 This version intentionally does not press keys or create Hudl tags automatically. First validate player identity on real Hudl footage.
+
+
+## Court filtering
+
+At startup V1 now asks for two selections:
+
+1. Hudl video ROI
+2. Volleyball court ROI
+
+Only person detections whose **bottom-center foot point** falls inside the calibrated court ROI are treated as players. This prevents coaches, referees, substitutes and other people outside the court from receiving tracker IDs, OCR processing or jersey memory.
+
+A secondary safety limit keeps at most 12 accepted player detections per frame.
+
