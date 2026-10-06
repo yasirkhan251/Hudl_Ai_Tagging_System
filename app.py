@@ -26,7 +26,7 @@ from config import (
     BALL_MAX_MISSING,
     BALL_SMOOTHING,
     YOLO_IMGSZ,
-    YOLO_HALF,
+    YOLO_HALF, YOLO_MAX_DET,
 )
 from player_memory import PlayerMemory
 
@@ -218,6 +218,7 @@ def main():
                 conf=CONFIDENCE,
                 imgsz=YOLO_IMGSZ,
                 half=bool(YOLO_HALF and use_gpu),
+                max_det=YOLO_MAX_DET,
                 verbose=False,
             )
             inference_ms = (time.perf_counter() - inference_start) * 1000.0
