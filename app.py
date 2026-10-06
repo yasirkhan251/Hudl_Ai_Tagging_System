@@ -118,7 +118,7 @@ def main():
     finally:
         preview_capture.close()
     court = select_court_roi(preview)
-    print(f"Court zone: {court}")
+    print(f"Court polygon points: {len(court)}")
 
     capture = ScreenCapture()
     memory = PlayerMemory()
@@ -206,7 +206,11 @@ def main():
             cv2.imshow(WINDOW_NAME, frame)
 
             key = cv2.waitKey(1) & 0xFF
-            if key in (ord("q"), ord("Q"), 27):
+            if key in (ord("c"), ord("C")):
+                print("Recalibrating court polygon...")
+                court = select_court_roi(frame)
+                print(f"Court polygon points: {len(court)}")
+            elif key in (ord("q"), ord("Q"), 27):
                 break
 
     finally:
