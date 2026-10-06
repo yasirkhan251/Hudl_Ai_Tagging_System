@@ -78,9 +78,13 @@ This version intentionally does not press keys or create Hudl tags automatically
 At startup V1 now asks for two selections:
 
 1. Hudl video ROI
-2. Volleyball court ROI
+2. Volleyball court polygon
 
-Only person detections whose **bottom-center foot point** falls inside the calibrated court ROI are treated as players. This prevents coaches, referees, substitutes and other people outside the court from receiving tracker IDs, OCR processing or jersey memory.
+The court is now selected as a free-form polygon instead of a rectangle, which handles camera perspective and trapezoidal court views much better. Click around the playable court boundary, then press **ENTER**. Press **R** to reset the points.
+
+Only person detections whose **bottom-center foot point** falls inside the calibrated polygon are treated as players. This prevents coaches, referees, substitutes and other people outside the court from receiving tracker IDs, OCR processing or jersey memory.
+
+During tracking, press **C** to recalibrate the court polygon if the Hudl camera zooms, pans or changes its framing. Press **Q** to exit.
 
 A secondary safety limit keeps at most 12 accepted player detections per frame.
 
