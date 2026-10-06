@@ -11,6 +11,7 @@ import easyocr
 import torch
 from ultralytics import YOLO
 
+from ball_detector import VolleyballDetector
 from ball_tracker import BallTracker
 from capture import ScreenCapture, select_screen_roi
 from court_filter import draw_court, foot_inside_court, select_court_roi
@@ -26,7 +27,7 @@ from config import (
     BALL_MAX_MISSING,
     BALL_SMOOTHING,
     YOLO_IMGSZ,
-    YOLO_HALF, YOLO_MAX_DET,
+    YOLO_HALF, YOLO_MAX_DET, BALL_MODEL, BALL_FRAME_DIR, BALL_CAPTURE_INTERVAL,
 )
 from player_memory import PlayerMemory
 
@@ -117,9 +118,9 @@ def draw_player(frame, box, track_id, memory):
 
 
 def main():
-    print("HUDL AI TAGGING SYSTEM - V4 PERFORMANCE + ASYNC OCR")
+    print("HUDL AI TAGGING SYSTEM - V5 CUSTOM VOLLEYBALL DETECTOR")
     print("Open Hudl first. Select only the video/player area.")
-    print("Press C to recalibrate the court. Press Q to stop.")
+    print("Press C to recalibrate court | B to capture a ball-training frame | Q to stop.")
 
     model_path = Path(YOLO_MODEL)
     if not model_path.exists():
@@ -139,6 +140,14 @@ def main():
     if use_gpu:
         print(f"GPU: {torch.cuda.get_device_name(0)}")
     reader = easyocr.Reader(["en"], gpu=use_gpu)
+
+    ball_detector = VolleyballDetector(
+        BALL_MODEL,
+        confidence=BALL_CONFIDENCE,
+        imgsz=YOLO_IMGSZ,
+        half=bool(YOLO_HALF and use_gpu),
+    )
+    BALL_FRAME_DIR.mkdir(parents=True, exist_ok=True)
 
     print("Select the Hudl video region...")
     roi = select_screen_roi()
@@ -171,6 +180,8 @@ def main():
     inference_ms = 0.0
     capture_ms = 0.0
     ocr_pending = 0
+    last_ball_capture = 0.0
+    ball_frame_count = 0
 
     memory_path = OUTPUT_DIR / "player_memory.json"
 
@@ -210,11 +221,12 @@ def main():
                 ocr_jobs.pop(track_id, None)
 
             inference_start = time.perf_counter()
+            # Player model handles ONLY people. Ball inference is separate.
             results = model.track(
                 frame,
                 persist=True,
                 tracker="botsort.yaml",
-                classes=[0, 32],
+                classes=[0],
                 conf=CONFIDENCE,
                 imgsz=YOLO_IMGSZ,
                 half=bool(YOLO_HALF and use_gpu),
@@ -233,22 +245,9 @@ def main():
                 confs = boxes.conf.cpu().numpy()
                 classes = boxes.cls.cpu().numpy().astype(int)
 
-                # Ball detection is independent of tracker IDs. The generic
-                # COCO sports-ball class is only a temporary test detector.
-                ball_candidates = []
-                for index, box in enumerate(xyxy):
-                    if classes[index] != 32:
-                        continue
-                    confidence = float(confs[index])
-                    if confidence < BALL_CONFIDENCE:
-                        continue
-
-                    x1, y1, x2, y2 = map(int, box)
-                    cx = (x1 + x2) // 2
-                    cy = (y1 + y2) // 2
-
-                    if foot_inside_court((cx, cy, cx, cy), court):
-                        ball_candidates.append((confidence, box))
+                # Dedicated volleyball detector. It is independent of
+                # player tracking and only runs when volleyball.pt exists.
+                ball_candidates = ball_detector.detect(frame, court)
 
                 if ball_candidates:
                     best_conf, best_box = max(
@@ -346,7 +345,7 @@ def main():
             )
             cv2.putText(
                 frame,
-                "C=Recalibrate Court | Q=Exit",
+                "C=Recalibrate | B=Capture Ball Frame | Q=Exit",
                 (10, 72),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.45,
@@ -358,6 +357,16 @@ def main():
             cv2.imshow(WINDOW_NAME, frame)
 
             key = cv2.waitKey(1) & 0xFF
+
+            if key in (ord("b"), ord("B")):
+                now_capture = time.perf_counter()
+                if now_capture - last_ball_capture >= BALL_CAPTURE_INTERVAL:
+                    ball_frame_count += 1
+                    filename = BALL_FRAME_DIR / f"ball_{int(time.time())}_{ball_frame_count:05d}.jpg"
+                    cv2.imwrite(str(filename), frame)
+                    last_ball_capture = now_capture
+                    print(f"Saved ball-training frame: {filename}")
+
             if key in (ord("c"), ord("C")):
                 print("Recalibrating court polygon...")
                 court = select_court_roi(frame)
