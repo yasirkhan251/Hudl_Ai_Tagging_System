@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+.env
+output/
+runs/
+datasets/
+models/*.pt
+models/*.onnx
+models/*.engine
+*.mp4
+*.avi
+*.mkv
