@@ -323,7 +323,10 @@ def main():
 
             cv2.rectangle(frame, (0, 0), (600, 86), (15, 20, 25), -1)
 
-            ball_status = "TRACKED" if ball.visible else "LOST"
+            if not ball_detector.available:
+                ball_status = "MODEL NEEDED"
+            else:
+                ball_status = "TRACKED" if ball.visible else "LOST"
             cv2.putText(
                 frame,
                 f"AI | FPS {fps:.1f} | PLAYERS {len(candidates)} | BALL {ball_status}",
