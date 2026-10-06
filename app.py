@@ -13,6 +13,7 @@ from ultralytics import YOLO
 
 from ball_detector import VolleyballDetector
 from ball_tracker import BallTracker
+from ball_capture import BallCaptureTool
 from capture import ScreenCapture, select_screen_roi
 from court_filter import draw_court, foot_inside_court, select_court_roi
 from config import (
@@ -120,7 +121,7 @@ def draw_player(frame, box, track_id, memory):
 def main():
     print("HUDL AI TAGGING SYSTEM - V5 CUSTOM VOLLEYBALL DETECTOR")
     print("Open Hudl first. Select only the video/player area.")
-    print("Press C to recalibrate court | B to capture a ball-training frame | Q to stop.")
+    print("Press C to recalibrate court | B to draw/capture the volleyball with the mouse | Q to stop.")
 
     model_path = Path(YOLO_MODEL)
     if not model_path.exists():
@@ -166,6 +167,13 @@ def main():
     capture = ScreenCapture()
     memory = PlayerMemory()
     ball = BallTracker(max_missing=BALL_MAX_MISSING, smoothing=BALL_SMOOTHING)
+
+    # Interactive ball capture/labeling. Press B, drag a tight box around
+    # the volleyball, then press ENTER or S. This creates:
+    #   images/train/*.jpg  -> full Hudl frame
+    #   labels/train/*.txt  -> YOLO class-0 bounding box
+    #   crops/*.jpg         -> tight volleyball crop for visual inspection
+    ball_capture = None
 
     # OCR runs in a separate worker so a slow EasyOCR call does not stall
     # the capture/detection/display loop.
@@ -349,7 +357,7 @@ def main():
             )
             cv2.putText(
                 frame,
-                "C=Recalibrate | B=Capture Ball Frame | Q=Exit",
+                "C=Recalibrate | B=Ball Capture | Q=Exit",
                 (10, 72),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.45,
@@ -358,19 +366,33 @@ def main():
                 cv2.LINE_AA,
             )
 
+            # Create the mouse tool only after the OpenCV window exists.
+            if ball_capture is None:
+                ball_capture = BallCaptureTool(WINDOW_NAME, BALL_DATASET_DIR)
+
+            if ball_capture.active:
+                ball_capture.draw(frame)
+
             cv2.imshow(WINDOW_NAME, frame)
 
             key = cv2.waitKey(1) & 0xFF
 
-            if key in (ord("b"), ord("B")):
+            if ball_capture.active:
+                if key in (13, 10, ord("s"), ord("S")):
+                    saved = ball_capture.save()
+                    if saved is not None:
+                        last_ball_capture = time.perf_counter()
+                elif key == 27:
+                    ball_capture.cancel()
+
+            elif key in (ord("b"), ord("B")):
                 now_capture = time.perf_counter()
                 if now_capture - last_ball_capture >= BALL_CAPTURE_INTERVAL:
-                    ball_frame_count += 1
-                    filename = BALL_FRAME_DIR / f"ball_{int(time.time())}_{ball_frame_count:05d}.jpg"
-                    # Save the clean Hudl frame before any AI overlays.
-                    cv2.imwrite(str(filename), raw_frame)
-                    last_ball_capture = now_capture
-                    print(f"Saved ball-training frame: {filename}")
+                    ball_capture.start_capture(raw_frame)
+                    print("Ball capture mode: drag a tight box around the volleyball, then press ENTER/S.")
+                else:
+                    remaining = BALL_CAPTURE_INTERVAL - (now_capture - last_ball_capture)
+                    print(f"Ball capture cooldown: {remaining:.1f}s")
 
             if key in (ord("c"), ord("C")):
                 print("Recalibrating court polygon...")
