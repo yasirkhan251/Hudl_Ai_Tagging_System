@@ -7,6 +7,7 @@ from pathlib import Path
 
 import cv2
 import easyocr
+import torch
 from ultralytics import YOLO
 
 from capture import ScreenCapture, select_screen_roi
@@ -98,7 +99,11 @@ def main():
     model = YOLO(str(model_path))
 
     print("Loading EasyOCR...")
-    reader = easyocr.Reader(["en"], gpu=True)
+    use_gpu = torch.cuda.is_available()
+    print(f"CUDA available: {use_gpu}")
+    if use_gpu:
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+    reader = easyocr.Reader(["en"], gpu=use_gpu)
 
     print("Select the Hudl video region...")
     roi = select_screen_roi()
